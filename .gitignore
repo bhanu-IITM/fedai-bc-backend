@@ -1,0 +1,14 @@
+# certs / keys (never commit)
+certs/
+*.pem
+*.key
+*.crt
+
+# build outputs
+bin/
+dist/
+*.exe
+*.out
+
+# go
+/vendor/
