@@ -1,0 +1,22 @@
+services:
+  fabric-gateway:
+    build: .
+    container_name: fabric-gateway
+    network_mode: host
+    environment:
+      - FABRIC_MSP_ID=Org1MSP
+      - FABRIC_CHANNEL=mychannel
+
+      # Same VM + peer is host-networked => hit localhost
+      - FABRIC_PEER_ENDPOINT=127.0.0.1:7051
+      - FABRIC_PEER_TLS_HOSTNAME=peer0.org1.example.com
+
+      - FABRIC_TLS_CA_CERT=/app/certs/peer0/tls/ca.crt
+      - FABRIC_SIGN_CERT=/app/certs/org1/admin/msp/cert.pem
+      - FABRIC_SIGN_KEY=/app/certs/org1/admin/msp/key.pem
+
+      # Optional: restrict server bind later if you add it in code
+      # - HTTP_BIND=127.0.0.1:8080
+    volumes:
+      - ./certs:/app/certs:ro
+    restart: unless-stopped

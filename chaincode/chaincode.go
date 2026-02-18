@@ -11,7 +11,7 @@
 // - Mutating “platform” ops are protected by a simple MSP allowlist (PLATFORM_ADMIN_MSP env var or default Org1MSP).
 // - Site-submitted ops (SubmitSiteUpdate) are validated against an ACTIVE grant + time window.
 
-package main
+package chaincode
 
 import (
 	"encoding/json"
