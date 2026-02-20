@@ -31,9 +31,11 @@ func MustLoadConfigFromEnv() Config {
 		Channel:      getenv("FABRIC_CHANNEL", "mychannel"),
 		Chaincode:    getenv("FABRIC_CHAINCODE", "poc"),
 
-		SignCertPath: getenv("FABRIC_SIGNCERT", "./certs/org1/admin/signcert.pem"),
-		SignKeyPath:  getenv("FABRIC_KEY", "./certs/org1/admin/key.pem"),
-		TLSCAPath:    getenv("FABRIC_TLS_CA", "./certs/peer0/tls/ca.crt"),
+		SignCertPath: getenv("FABRIC_SIGNCERT", ""),
+		SignKeyPath:  getenv("FABRIC_KEY", ""),
+		TLSCAPath:    getenv("FABRIC_TLS_CA", ""),
+
+		
 
 		EvaluateTimeoutSec: atoi(getenv("HLF_TIMEOUT_EVALUATE", "10"), 10),
 		EndorseTimeoutSec:  atoi(getenv("HLF_TIMEOUT_ENDORSE", "15"), 15),
@@ -42,9 +44,16 @@ func MustLoadConfigFromEnv() Config {
 	}
 
 	// minimal validation
-	if cfg.SignCertPath == "" || cfg.SignKeyPath == "" || cfg.TLSCAPath == "" {
-		log.Fatal("missing cert/key paths")
+	if cfg.SignCertPath == "" {
+	log.Fatal("FABRIC_SIGNCERT not set")
 	}
+	if cfg.SignKeyPath == "" {
+		log.Fatal("FABRIC_KEY not set")
+	}
+	if cfg.TLSCAPath == "" {
+		log.Fatal("FABRIC_TLS_CA not set")
+	}
+
 	return cfg
 }
 
