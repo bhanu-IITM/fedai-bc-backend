@@ -9,6 +9,7 @@ import (
 	"golang-fabric-service/internal/httpapi"
 	"golang-fabric-service/internal/httpapi/jobs"
 	"golang-fabric-service/internal/httpapi/network"
+	"golang-fabric-service/internal/httpapi/auth"
 
 	"github.com/gin-gonic/gin"
 )
@@ -36,14 +37,16 @@ func main() {
 	r.POST("/api/submit/:fn", h.Submit)
 	r.POST("/api/eval/:fn", h.Evaluate)
 
+
+
 	// ---- CA endpoints ----
-	adminHandler := httpapi.NewCAAdminHandler(caCfg)
+	adminHandler := auth.NewCAAdminHandler(caCfg)
 	r.POST("/api/ca/enroll-admin", adminHandler.EnrollAdmin)
 
 	//Using this endpoint once the identity generation works, we can also add the chaincode call to
 	//RegisterSite() using the admin identity (Pattern A) before returning response.
-	caHospitalHandler := httpapi.NewCAHospitalHandler(caCfg, gw, cfg)
-	r.POST("api/ca/register-enroll", caHospitalHandler.RegisterEnroll)
+	caHospitalHandler := auth.NewCAHospitalHandler(caCfg, gw, cfg)
+	r.POST("/api/ca/register-enroll", caHospitalHandler.RegisterEnroll)
 
 	// ---- Job submission endpoints ----
 	jobHandler := jobs.NewSubmitJobHandler(gw)
@@ -64,6 +67,13 @@ func main() {
 	// ---- Network shutdown endpoints ----
 	shutdownHandler := network.NewShutdownHandler(gw)
 	r.POST("/api/v1/network/shutdown/client/:client_name", shutdownHandler.ShutdownClient)
+
+	// ---- Authentication endpoints ----
+	loginHandler := auth.NewLoginHandler(gw)
+	r.POST("/api/v1/auth/login", loginHandler.Login)
+	r.POST("/api/v1/auth/verify-token", loginHandler.VerifyToken)
+
+	
 
 	addr := getenv("HTTP_ADDR", "127.0.0.1:8080")
 	log.Printf("Fabric Gateway Service running on %s", addr)

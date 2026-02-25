@@ -1353,14 +1353,120 @@ func (s *SmartContract) LogJobsList(ctx contractapi.TransactionContextInterface,
 	return nil
 }
 
-/* ------------------------------ Main ------------------------------ */
+/* ============================== H) Authentication Functions (Login/Token) ============================== */
 
-func main() {
-	cc, err := contractapi.NewChaincode(&SmartContract{})
+// StoreLoginCredentials(credentialsJSON)
+// Stores client login credentials (client_id and password) for future authentication
+func (s *SmartContract) StoreLoginCredentials(ctx contractapi.TransactionContextInterface, credentialsJSON string) error {
+	var creds map[string]interface{}
+	if err := unmarshal(credentialsJSON, &creds); err != nil {
+		return err
+	}
+
+	clientID := ""
+	if cID, ok := creds["client_id"].(string); ok {
+		clientID = cID
+	}
+	if clientID == "" {
+		return fmt.Errorf("client_id is required")
+	}
+
+	key := fmt.Sprintf("auth:credentials:%s", clientID)
+	if err := putJSON(ctx, key, creds); err != nil {
+		return err
+	}
+	emit(ctx, "LoginCredentialsStored", map[string]any{"client_id": clientID})
+	return nil
+}
+
+// ValidateLogin(loginJSON)
+// Validates client credentials against stored credentials
+// Returns JSON with {valid: true/false}
+func (s *SmartContract) ValidateLogin(ctx contractapi.TransactionContextInterface, loginJSON string) (string, error) {
+	var login map[string]interface{}
+	if err := unmarshal(loginJSON, &login); err != nil {
+		return marshal(map[string]any{"valid": false, "error": "invalid request"})
+	}
+
+	clientID, ok := login["client_id"].(string)
+	if !ok || clientID == "" {
+		return marshal(map[string]any{"valid": false, "error": "client_id required"})
+	}
+
+	password, ok := login["password"].(string)
+	if !ok || password == "" {
+		return marshal(map[string]any{"valid": false, "error": "password required"})
+	}
+
+	// Retrieve stored credentials
+	key := fmt.Sprintf("auth:credentials:%s", clientID)
+	var storedCreds map[string]interface{}
+	ok, err := getJSON(ctx, key, &storedCreds)
 	if err != nil {
-		panic(err)
+		return marshal(map[string]any{"valid": false, "error": "lookup failed"})
 	}
-	if err := cc.Start(); err != nil {
-		panic(err)
+	if !ok {
+		return marshal(map[string]any{"valid": false, "error": "client not found"})
 	}
+
+	// Compare password
+	storedPassword, ok := storedCreds["password"].(string)
+	if !ok || storedPassword != password {
+		return marshal(map[string]any{"valid": false, "error": "invalid credentials"})
+	}
+
+	return marshal(map[string]any{"valid": true})
+}
+
+// StoreLoginToken(tokenJSON)
+// Stores a login token for a client
+func (s *SmartContract) StoreLoginToken(ctx contractapi.TransactionContextInterface, tokenJSON string) error {
+	var tokenData map[string]interface{}
+	if err := unmarshal(tokenJSON, &tokenData); err != nil {
+		return err
+	}
+
+	token, ok := tokenData["token"].(string)
+	if !ok || token == "" {
+		return fmt.Errorf("token is required")
+	}
+
+	clientID, ok := tokenData["client_id"].(string)
+	if !ok || clientID == "" {
+		return fmt.Errorf("client_id is required")
+	}
+
+	// Key format: auth:token:{token}
+	key := fmt.Sprintf("auth:token:%s", token)
+	if err := putJSON(ctx, key, tokenData); err != nil {
+		return err
+	}
+
+	// Also add for quick lookup by client_id: auth:token~client:{client_id}:{token}
+	idx, _ := ctx.GetStub().CreateCompositeKey("auth:token~client", []string{clientID, token})
+	_ = ctx.GetStub().PutState(idx, []byte{0x00})
+
+	emit(ctx, "LoginTokenStored", map[string]any{"client_id": clientID, "token": token})
+	return nil
+}
+
+// VerifyLoginToken(token)
+// Verifies if a token is valid
+// Returns JSON with {valid: true/false}
+func (s *SmartContract) VerifyLoginToken(ctx contractapi.TransactionContextInterface, token string) (string, error) {
+	if token == "" {
+		return marshal(map[string]any{"valid": false, "error": "token required"})
+	}
+
+	key := fmt.Sprintf("auth:token:%s", token)
+	var tokenData map[string]interface{}
+	ok, err := getJSON(ctx, key, &tokenData)
+	if err != nil {
+		return marshal(map[string]any{"valid": false, "error": "verification failed"})
+	}
+	if !ok {
+		return marshal(map[string]any{"valid": false, "error": "token not found"})
+	}
+
+	return marshal(map[string]any{"valid": true, "data": tokenData})
 }
