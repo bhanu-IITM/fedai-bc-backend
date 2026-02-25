@@ -135,23 +135,23 @@ type TrainingConstraints struct {
 }
 
 type TrainingAccessGrant struct {
-	GrantID     string             `json:"grant_id"`
-	JobID       string             `json:"job_id"`
-	ModelID     string             `json:"model_id"`
-	SiteID      string             `json:"site_id"`
-	OrgMSP      string             `json:"org_msp"`
-	PolicyID    string             `json:"policy_id"`
-	PolicyHash  string             `json:"policy_hash"`
-	Purpose     string             `json:"purpose"` // TRAIN / VALIDATE
+	GrantID     string              `json:"grant_id"`
+	JobID       string              `json:"job_id"`
+	ModelID     string              `json:"model_id"`
+	SiteID      string              `json:"site_id"`
+	OrgMSP      string              `json:"org_msp"`
+	PolicyID    string              `json:"policy_id"`
+	PolicyHash  string              `json:"policy_hash"`
+	Purpose     string              `json:"purpose"` // TRAIN / VALIDATE
 	Constraints TrainingConstraints `json:"constraints"`
 
 	ValidFrom string      `json:"valid_from"` // RFC3339
 	ValidTo   string      `json:"valid_to"`   // RFC3339
 	Status    GrantStatus `json:"status"`
 
-	IssuedByMSP string `json:"issued_by_msp"`
-	IssuedAt    string `json:"issued_at"`
-	RenewalHash string `json:"renewal_hash,omitempty"`
+	IssuedByMSP   string `json:"issued_by_msp"`
+	IssuedAt      string `json:"issued_at"`
+	RenewalHash   string `json:"renewal_hash,omitempty"`
 	RevokedReason string `json:"revoked_reason,omitempty"`
 }
 
@@ -173,16 +173,16 @@ type RoundRecord struct {
 }
 
 type SiteUpdate struct {
-	UpdateID        string `json:"update_id"`
-	JobID           string `json:"job_id"`
-	RoundID         int    `json:"round_id"`
-	SiteID          string `json:"site_id"`
-	UpdateHash      string `json:"update_hash"`      // hash of weights/gradients delta package
-	MetricsHash     string `json:"metrics_hash"`     // hash of metrics blob
-	DataDigestHash  string `json:"data_digest_hash"` // optional: hash of dataset signature / cohort digest
-	SubmittedAt     string `json:"submitted_at"`
-	SubmittedByMSP  string `json:"submitted_by_msp"`
-	GrantID         string `json:"grant_id,omitempty"`
+	UpdateID       string `json:"update_id"`
+	JobID          string `json:"job_id"`
+	RoundID        int    `json:"round_id"`
+	SiteID         string `json:"site_id"`
+	UpdateHash     string `json:"update_hash"`      // hash of weights/gradients delta package
+	MetricsHash    string `json:"metrics_hash"`     // hash of metrics blob
+	DataDigestHash string `json:"data_digest_hash"` // optional: hash of dataset signature / cohort digest
+	SubmittedAt    string `json:"submitted_at"`
+	SubmittedByMSP string `json:"submitted_by_msp"`
+	GrantID        string `json:"grant_id,omitempty"`
 }
 
 type RoundCommit struct {
@@ -215,7 +215,7 @@ func keyGrant(grantID string) string      { return "grant:" + grantID }
 func keyRound(jobID string, roundID int) string {
 	return fmt.Sprintf("round:%s:%d", jobID, roundID)
 }
-func keyUpdate(updateID string) string    { return "update:" + updateID }
+func keyUpdate(updateID string) string { return "update:" + updateID }
 func keyCommit(jobID string, roundID int) string {
 	return fmt.Sprintf("commit:%s:%d", jobID, roundID)
 }
@@ -300,7 +300,7 @@ func unmarshal(in string, out any) error {
 
 /* ============================== A) Site Lifecycle ============================== */
 
-// RegisterSite(siteJSON)
+// RegisterSite(siteJSON)   ------> DONE in chaincode, called from CA handler after hospital enrollment
 func (s *SmartContract) RegisterSite(ctx contractapi.TransactionContextInterface, siteJSON string) error {
 	if err := requirePlatform(ctx); err != nil {
 		return err
@@ -1246,6 +1246,111 @@ func (s *SmartContract) ListArtifactsForJob(ctx contractapi.TransactionContextIn
 		artifacts = append(artifacts, a)
 	}
 	return marshal(artifacts)
+}
+
+/* ============================== G) Logging/Audit Functions (NVFlare Integration) ============================== */
+
+// StoreJobSubmission(jobSubmissionJSON)
+// Logs the NVFlare job submission response to the ledger
+func (s *SmartContract) StoreJobSubmission(ctx contractapi.TransactionContextInterface, jobSubmissionJSON string) error {
+	var submission map[string]interface{}
+	if err := unmarshal(jobSubmissionJSON, &submission); err != nil {
+		return err
+	}
+
+	// Extract job_id if available
+	jobID := ""
+	if jID, ok := submission["job_id"].(string); ok {
+		jobID = jID
+	}
+
+	ts := nowRFC3339()
+	// Key format: nvflare:joblogs:jobid:timestamp for easy indexing
+	key := fmt.Sprintf("nvflare:joblog:%s:%s", jobID, ts)
+
+	if err := putJSON(ctx, key, submission); err != nil {
+		return err
+	}
+	emit(ctx, "NVFlareJobSubmissionStored", submission)
+	return nil
+}
+
+// LogJobStatus(jobStatusJSON)
+// Logs the NVFlare job status update to the ledger
+func (s *SmartContract) LogJobStatus(ctx contractapi.TransactionContextInterface, jobStatusJSON string) error {
+	var status map[string]interface{}
+	if err := unmarshal(jobStatusJSON, &status); err != nil {
+		return err
+	}
+
+	// Extract job_id if available
+	jobID := ""
+	if jID, ok := status["job_id"].(string); ok {
+		jobID = jID
+	}
+
+	ts := nowRFC3339()
+	key := fmt.Sprintf("nvflare:jobstatus:%s:%s", jobID, ts)
+
+	if err := putJSON(ctx, key, status); err != nil {
+		return err
+	}
+	emit(ctx, "NVFlareJobStatusLogged", status)
+	return nil
+}
+
+// LogJobAbort(abortResponseJSON)
+// Logs the NVFlare job abort event to the ledger
+func (s *SmartContract) LogJobAbort(ctx contractapi.TransactionContextInterface, abortResponseJSON string) error {
+	var abort map[string]interface{}
+	if err := unmarshal(abortResponseJSON, &abort); err != nil {
+		return err
+	}
+
+	ts := nowRFC3339()
+	key := fmt.Sprintf("nvflare:jobabort:%s", ts)
+
+	if err := putJSON(ctx, key, abort); err != nil {
+		return err
+	}
+	emit(ctx, "NVFlareJobAbortLogged", abort)
+	return nil
+}
+
+// LogClientShutdown(shutdownResponseJSON)
+// Logs the client graceful shutdown event to the ledger
+func (s *SmartContract) LogClientShutdown(ctx contractapi.TransactionContextInterface, shutdownResponseJSON string) error {
+	var shutdown map[string]interface{}
+	if err := unmarshal(shutdownResponseJSON, &shutdown); err != nil {
+		return err
+	}
+
+	ts := nowRFC3339()
+	key := fmt.Sprintf("nvflare:clientshutdown:%s", ts)
+
+	if err := putJSON(ctx, key, shutdown); err != nil {
+		return err
+	}
+	emit(ctx, "NVFlareClientShutdownLogged", shutdown)
+	return nil
+}
+
+// LogJobsList(jobsListJSON)
+// Logs the NVFlare jobs list response to the ledger
+func (s *SmartContract) LogJobsList(ctx contractapi.TransactionContextInterface, jobsListJSON string) error {
+	var jobsList interface{}
+	if err := unmarshal(jobsListJSON, &jobsList); err != nil {
+		return err
+	}
+
+	ts := nowRFC3339()
+	key := fmt.Sprintf("nvflare:jobslist:%s", ts)
+
+	if err := putJSON(ctx, key, jobsList); err != nil {
+		return err
+	}
+	emit(ctx, "NVFlareJobsListLogged", jobsList)
+	return nil
 }
 
 /* ------------------------------ Main ------------------------------ */

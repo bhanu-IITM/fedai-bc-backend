@@ -4,10 +4,13 @@ import (
 	"log"
 	"os"
 
-	"github.com/gin-gonic/gin"
+	"golang-fabric-service/internal/ca"
 	"golang-fabric-service/internal/fabric"
 	"golang-fabric-service/internal/httpapi"
-	"golang-fabric-service/internal/ca"
+	"golang-fabric-service/internal/httpapi/jobs"
+	"golang-fabric-service/internal/httpapi/network"
+
+	"github.com/gin-gonic/gin"
 )
 
 func main() {
@@ -30,21 +33,37 @@ func main() {
 	})
 
 	h := httpapi.NewHandler(gw, cfg)
-	r.POST("/submit/:fn", h.Submit)
-	r.POST("/eval/:fn", h.Evaluate)
-	
+	r.POST("/api/submit/:fn", h.Submit)
+	r.POST("/api/eval/:fn", h.Evaluate)
+
 	// ---- CA endpoints ----
 	adminHandler := httpapi.NewCAAdminHandler(caCfg)
-	r.POST("/ca/enroll-admin", adminHandler.EnrollAdmin)
+	r.POST("/api/ca/enroll-admin", adminHandler.EnrollAdmin)
 
-	//Using this endpoint once the identity generation works, we can also add the chaincode call to 
+	//Using this endpoint once the identity generation works, we can also add the chaincode call to
 	//RegisterSite() using the admin identity (Pattern A) before returning response.
-	caHospitalHandler := httpapi.NewCAHospitalHandler(caCfg)
-	r.POST("/ca/register-enroll", caHospitalHandler.RegisterEnroll)
+	caHospitalHandler := httpapi.NewCAHospitalHandler(caCfg, gw, cfg)
+	r.POST("api/ca/register-enroll", caHospitalHandler.RegisterEnroll)
 
-	
-	// r.POST("/registry/hospitals", h.RegisterHospital)
+	// ---- Job submission endpoints ----
+	jobHandler := jobs.NewSubmitJobHandler(gw)
+	r.POST("/api/v1/jobs/submit", jobHandler.Submit)
 
+	// ---- Job list endpoints ----
+	listHandler := jobs.NewListJobsHandler(gw)
+	r.POST("/api/v1/jobs", listHandler.ListJobs)
+
+	// ---- Job status endpoints ----
+	statusHandler := jobs.NewStatusHandler(gw)
+	r.POST("/api/v1/jobs/status", statusHandler.GetStatus)
+
+	// ---- Job abort endpoints ----
+	abortHandler := jobs.NewAbortHandler(gw)
+	r.POST("/api/v1/jobs/abort", abortHandler.Abort)
+
+	// ---- Network shutdown endpoints ----
+	shutdownHandler := network.NewShutdownHandler(gw)
+	r.POST("/api/v1/network/shutdown/client/:client_name", shutdownHandler.ShutdownClient)
 
 	addr := getenv("HTTP_ADDR", "127.0.0.1:8080")
 	log.Printf("Fabric Gateway Service running on %s", addr)
@@ -52,8 +71,6 @@ func main() {
 		log.Fatal(err)
 	}
 }
-
-
 
 func getenv(k, d string) string {
 	if v := os.Getenv(k); v != "" {
