@@ -28,7 +28,7 @@ func (h *CAAdminHandler) EnrollAdmin(c *gin.Context) {
 
 	adminMSPDir := h.cfg.BaseDir + "/_ca_admin/" + h.cfg.MSPID + "/admin"
 
-	c.JSON(200, gin.H{
+	c.JSON(http.StatusOK, gin.H{
 		"status":     "SUCCESS",
 		"admin_id":   h.cfg.AdminID,
 		"msp_dir":    adminMSPDir,

@@ -7,6 +7,14 @@ cd ~/services/golang-fabric-service
 go mod tidy
 go build -o golang-fabric-service ./cmd/server   # adjust path if your main is elsewhere
 
+# if we are doing re deploy :
+
+sudo systemctl stop golang-fabric-service
+sudo cp golang-fabric-service /opt/golang-fabric-service/golang-fabric-service
+sudo systemctl start golang-fabric-service
+
+journalctl -u golang-fabric-service -f
+
 
 # (Optional) put binary in a stable location:
 sudo mkdir -p /opt/golang-fabric-service
@@ -53,12 +61,6 @@ journalctl -u golang-fabric-service -f
 Systemd env file is at:
 sudo nano /etc/golang-fabric-service/env
 
-
-Safe Deploy Sequence:
-
-sudo systemctl stop golang-fabric-service
-sudo cp golang-fabric-service /opt/golang-fabric-service/golang-fabric-service
-sudo systemctl start golang-fabric-service
 
 # to restart after changes:
 sudo systemctl restart golang-fabric-service

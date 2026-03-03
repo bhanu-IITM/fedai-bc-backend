@@ -207,7 +207,22 @@ func (h *CAHospitalHandler) RegisterEnroll(c *gin.Context) {
 		results = append(results, res)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	// Check if any registration failed
+	hasFailures := false
+	for _, res := range results {
+		if res.Status == "FAILED" {
+			hasFailures = true
+			break
+		}
+	}
+
+	// Return appropriate status code
+	statusCode := http.StatusOK
+	if hasFailures {
+		statusCode = http.StatusInternalServerError
+	}
+
+	c.JSON(statusCode, gin.H{
 		"status":  "DONE",
 		"project": req.ProjectName,
 		"results": results,
