@@ -5,34 +5,22 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"golang-fabric-service/internal/core/domain/repositories/nosql"
 	"golang-fabric-service/internal/fabric"
 
 	"github.com/gin-gonic/gin"
 )
 
-type ShutdownHandler struct {
-	gw *fabric.Gateway
-}
-
-func NewShutdownHandler(gw *fabric.Gateway) *ShutdownHandler {
-	return &ShutdownHandler{gw: gw}
-}
-
-type ClientShutdownResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
-}
-
 // POST /api/v1/network/shutdown/client/{client_name}
 // Receives client shutdown notification and logs it to the ledger
-func (h *ShutdownHandler) ShutdownClient(c *gin.Context) {
+func (h *NetworkHandler) ShutdownClient(c *gin.Context) {
 	clientName := c.Param("client_name")
 	if clientName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "client_name is required"})
 		return
 	}
 
-	var clientResponse ClientShutdownResponse
+	var clientResponse nosql.ClientShutdownResponse
 	if err := c.ShouldBindJSON(&clientResponse); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return

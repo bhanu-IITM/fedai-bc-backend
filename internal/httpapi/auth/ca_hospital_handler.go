@@ -15,66 +15,12 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"golang-fabric-service/internal/ca"
+	"golang-fabric-service/internal/core/domain/repositories/nosql"
 	"golang-fabric-service/internal/fabric"
 )
 
-type CAHospitalHandler struct {
-	caCfg ca.Config
-	gw    *fabric.Gateway
-	cfg   fabric.Config
-}
-
-func NewCAHospitalHandler(caCfg ca.Config, gw *fabric.Gateway, cfg fabric.Config) *CAHospitalHandler {
-	return &CAHospitalHandler{caCfg: caCfg, gw: gw, cfg: cfg}
-}
-
-type MockHospital struct {
-	Name string `json:"name"`
-	Org  string `json:"org,omitempty"`
-}
-
-type RegisterEnrollReq struct {
-	ProjectName   string         `json:"project_name"`
-	MockHospitals []MockHospital `json:"mock_hospitals"`
-
-	// If true, we will best-effort wait for commit confirmation.
-	// NOTE: actual commit wait duration is bounded by gateway WithCommitStatusTimeout(cfg.CommitTimeoutSec)
-	WaitForCommit bool `json:"wait_for_commit,omitempty"`
-}
-
-type RegisterEnrollResult struct {
-	Status string `json:"status"` // CREATED / PENDING / FAILED
-
-	Fabric struct {
-		EnrollID    string `json:"enroll_id"`
-		MSPDir      string `json:"msp_dir"`
-		CertPath    string `json:"cert_path"`
-		KeyPath     string `json:"key_path"`
-		Secret      string `json:"secret"`
-		Fingerprint string `json:"fingerprint"`
-	} `json:"fabric"`
-
-	Ledger struct {
-		Anchored  bool   `json:"anchored"`
-		TxID      string `json:"txid,omitempty"`
-		Committed bool   `json:"committed"`
-		Error     string `json:"error,omitempty"`
-		Record    string `json:"record,omitempty"`
-	} `json:"ledger"`
-
-	NVFlare struct {
-		Name string `json:"name"`
-		Org  string `json:"org,omitempty"`
-	} `json:"nvflare"`
-
-	Auth struct {
-		ClientID string `json:"client_id"`
-		Password string `json:"password"`
-	} `json:"auth"`
-}
-
-func (h *CAHospitalHandler) RegisterEnroll(c *gin.Context) {
-	var req RegisterEnrollReq
+func (h *AuthHandler) RegisterEnroll(c *gin.Context) {
+	var req nosql.RegisterEnrollReq
 	if err := c.ShouldBindJSON(&req); err != nil || req.ProjectName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json: project_name required"})
 		return
@@ -90,10 +36,10 @@ func (h *CAHospitalHandler) RegisterEnroll(c *gin.Context) {
 	// endorse+submit timeout (commit timeout is configured at gateway connect time)
 	esTimeout := time.Duration(h.cfg.EndorseTimeoutSec+h.cfg.SubmitTimeoutSec) * time.Second
 
-	results := make([]RegisterEnrollResult, 0, len(req.MockHospitals))
+	results := make([]nosql.RegisterEnrollResult, 0, len(req.MockHospitals))
 
 	for _, hospital := range req.MockHospitals {
-		var res RegisterEnrollResult
+		var res nosql.RegisterEnrollResult
 		res.NVFlare.Name = hospital.Name
 		res.NVFlare.Org = hospital.Org
 
@@ -177,30 +123,35 @@ func (h *CAHospitalHandler) RegisterEnroll(c *gin.Context) {
 			if b, e := contract.EvaluateTransaction("GetSite", hospital.Name); e == nil {
 				res.Ledger.Record = string(b)
 			}
-
-			// Store login credentials in chaincode
-			credentialsJSON, _ := json.Marshal(map[string]string{
-				"client_id": res.Auth.ClientID,
-				"password":  res.Auth.Password,
-			})
-			credTx := submitter.SubmitWithOpts(
-				c.Request.Context(),
-				"StoreLoginCredentials",
-				fabric.SubmitOpts{
-					Mode:                 mode,
-					EndorseSubmitTimeout: esTimeout,
-				},
-				string(credentialsJSON),
-			)
-			if credTx.Status == "FAILED" {
-				res.Ledger.Error = fmt.Sprintf("credential storage failed: %s", credTx.Error)
-			}
 		} else {
 			// PENDING (async no-wait OR commit not confirmed within gateway commit timeout)
 			res.Status = "PENDING"
 			res.Ledger.Committed = false
 			if tx.Error != "" {
 				res.Ledger.Error = tx.Error // e.g., "commit not confirmed"
+			}
+		}
+
+		// Store login credentials in chaincode (regardless of RegisterSite commit status)
+		// Credentials storage is independent and should work in both sync and async modes
+		credentialsJSON, _ := json.Marshal(map[string]string{
+			"client_id": res.Auth.ClientID,
+			"password":  res.Auth.Password,
+		})
+		credTx := submitter.SubmitWithOpts(
+			c.Request.Context(),
+			"StoreLoginCredentials",
+			fabric.SubmitOpts{
+				Mode:                 mode,
+				EndorseSubmitTimeout: esTimeout,
+			},
+			string(credentialsJSON),
+		)
+		if credTx.Status == "FAILED" {
+			if res.Ledger.Error == "" {
+				res.Ledger.Error = fmt.Sprintf("credential storage failed: %s", credTx.Error)
+			} else {
+				res.Ledger.Error = res.Ledger.Error + "; credential storage failed: " + credTx.Error
 			}
 		}
 

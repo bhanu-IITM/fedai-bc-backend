@@ -7,14 +7,6 @@ import (
 	"golang-fabric-service/internal/ca"
 )
 
-type CAAdminHandler struct {
-	cfg ca.Config
-}
-
-func NewCAAdminHandler(cfg ca.Config) *CAAdminHandler {
-	return &CAAdminHandler{cfg: cfg}
-}
-
 func (h *CAAdminHandler) EnrollAdmin(c *gin.Context) {
 
 	err := ca.EnsureAdminEnrolled(h.cfg)

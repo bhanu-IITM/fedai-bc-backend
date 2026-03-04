@@ -9,6 +9,7 @@ import (
 
 type TxMode string
 
+
 const (
 	TxAsyncNoWait   TxMode = "ASYNC_NO_WAIT"   // return immediately after submit
 	TxAsyncWaitCommit TxMode = "ASYNC_WAIT_COMMIT" // block on commit.Status() (bounded by gateway commit timeout)

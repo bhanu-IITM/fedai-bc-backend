@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"golang-fabric-service/internal/core/domain/repositories/nosql"
 	"golang-fabric-service/internal/fabric"
 
 	"github.com/gin-gonic/gin"
@@ -22,16 +23,7 @@ func NewLoginHandler(gw *fabric.Gateway) *LoginHandler {
 	return &LoginHandler{gw: gw}
 }
 
-type LoginRequest struct {
-	ClientID string `json:"client_id" binding:"required"`
-	Password string `json:"password" binding:"required"`
-}
 
-type LoginResponse struct {
-	Status  string `json:"status"`
-	Token   string `json:"token"`
-	Message string `json:"message"`
-}
 
 // Generate a random 8-digit token with mixed numbers and alphabets
 func generateRandomToken(length int) string {
@@ -46,7 +38,7 @@ func generateRandomToken(length int) string {
 // POST /api/v1/auth/login
 // Validates client credentials and generates an access token
 func (h *LoginHandler) Login(c *gin.Context) {
-	var req LoginRequest
+	var req nosql.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "client_id and password are required"})
 		return
@@ -104,7 +96,7 @@ func (h *LoginHandler) Login(c *gin.Context) {
 		return
 	}
 
-	response := LoginResponse{
+	response := nosql.LoginResponse{
 		Status:  "success",
 		Token:   token,
 		Message: "Login successful. Use this token for NVFlare operations.",

@@ -5,29 +5,16 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"golang-fabric-service/internal/core/domain/repositories/nosql"
 	"golang-fabric-service/internal/fabric"
 
 	"github.com/gin-gonic/gin"
 )
 
-type SubmitJobHandler struct {
-	gw *fabric.Gateway
-}
-
-func NewSubmitJobHandler(gw *fabric.Gateway) *SubmitJobHandler {
-	return &SubmitJobHandler{gw: gw}
-}
-
-type SubmitJobResponse struct {
-	Status  string `json:"status"`
-	JobID   string `json:"job_id"`
-	Message string `json:"message"`
-}
-
 // POST /api/v1/jobs/submit
 // Accepts the NVFlare API response and stores it to the ledger
-func (h *SubmitJobHandler) Submit(c *gin.Context) {
-	var nvflareResponse SubmitJobResponse
+func (h *JobHandler) Submit(c *gin.Context) {
+	var nvflareResponse nosql.SubmitJobResponse
 	if err := c.ShouldBindJSON(&nvflareResponse); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return

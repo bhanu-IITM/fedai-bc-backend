@@ -5,28 +5,16 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"golang-fabric-service/internal/core/domain/repositories/nosql"
 	"golang-fabric-service/internal/fabric"
 
 	"github.com/gin-gonic/gin"
 )
 
-type AbortHandler struct {
-	gw *fabric.Gateway
-}
-
-func NewAbortHandler(gw *fabric.Gateway) *AbortHandler {
-	return &AbortHandler{gw: gw}
-}
-
-type AbortJobResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
-}
-
 // POST /api/v1/jobs/abort
 // Receives NVFlare job abort confirmation and logs it to the ledger
-func (h *AbortHandler) Abort(c *gin.Context) {
-	var nvflareResponse AbortJobResponse
+func (h *JobHandler) Abort(c *gin.Context) {
+	var nvflareResponse nosql.AbortJobResponse
 	if err := c.ShouldBindJSON(&nvflareResponse); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return

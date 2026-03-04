@@ -5,30 +5,16 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"golang-fabric-service/internal/core/domain/repositories/nosql"
 	"golang-fabric-service/internal/fabric"
 
 	"github.com/gin-gonic/gin"
 )
 
-type ListJobsHandler struct {
-	gw *fabric.Gateway
-}
-
-func NewListJobsHandler(gw *fabric.Gateway) *ListJobsHandler {
-	return &ListJobsHandler{gw: gw}
-}
-
-type JobInfo struct {
-	JobID      string `json:"job_id"`
-	JobName    string `json:"job_name"`
-	Status     string `json:"status"`
-	SubmitTime string `json:"submit_time"`
-}
-
 // POST /api/v1/jobs
 // Receives NVFlare job list response and logs it to the ledger
-func (h *ListJobsHandler) ListJobs(c *gin.Context) {
-	var nvflareJobsList []JobInfo
+func (h *JobHandler) ListJobs(c *gin.Context) {
+	var nvflareJobsList []nosql.JobInfo
 	if err := c.ShouldBindJSON(&nvflareJobsList); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
