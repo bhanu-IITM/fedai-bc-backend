@@ -1,0 +1,33 @@
+HOW THE MONITOR JOB WILL BE INTEGRATED IN THE FLARE BACKEND?? :
+
+
+import requests
+
+# ... existing code ...
+
+if job_status.startswith("FINISHED"):
+    # Log the monitor event to the blockchain
+    log_payload = {
+        "job_id": job_id,
+        "return_code": MonitorReturnCode.JOB_FINISHED.value,  # Assuming enum has .value
+        "job_meta": job_meta
+    }
+    try:
+        requests.post("http://your-blockchain-service-url/api/v1/jobs/monitor", json=log_payload)
+    except Exception as e:
+        # Optional: Handle logging failure (e.g., log locally)
+        pass
+    
+    return MonitorReturnCode.JOB_FINISHED, job_meta
+
+
+
+
+
+
+Request Example:
+{
+  "job_id": "job-123",
+  "return_code": 0,  // 0 for JobFinished
+  "job_meta": {"status": "COMPLETED", ...}
+}

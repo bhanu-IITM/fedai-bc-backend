@@ -7,18 +7,24 @@ import (
 )
 
 // RegisterRoutes registers all job-related routes
-func RegisterRoutes(r *gin.Engine, gw *fabric.Gateway) {
+func RegisterRoutes(r *gin.Engine, gw *fabric.Gateway, basePath string) {
 	jobHandler := NewJobHandler(gw)
 
 	// Job submission endpoint
-	r.POST("/api/v1/jobs/submit", jobHandler.Submit)
+	r.POST(basePath+"/jobs/submit", jobHandler.Submit)
 
 	// Job list endpoint
-	r.POST("/api/v1/jobs", jobHandler.ListJobs)
+	r.POST(basePath+"/jobs", jobHandler.ListJobs)
 
 	// Job status endpoint
-	r.POST("/api/v1/jobs/status", jobHandler.GetStatus)
+	r.POST(basePath+"/jobs/status", jobHandler.GetStatus)
 
 	// Job abort endpoint
-	r.POST("/api/v1/jobs/abort", jobHandler.Abort)
+	r.POST(basePath+"/jobs/abort", jobHandler.Abort)
+
+	// Job delete endpoint
+	r.DELETE(basePath+"/jobs/:jobId", jobHandler.Delete)
+
+	// Job monitor endpoint
+	r.POST(basePath+"/jobs/monitor", jobHandler.Monitor)
 }

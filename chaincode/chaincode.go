@@ -1320,6 +1320,24 @@ func (s *SmartContract) LogJobAbort(ctx contractapi.TransactionContextInterface,
 	return nil
 }
 
+// LogJobMonitor(monitorResponseJSON)
+// Logs the NVFlare job monitor event to the ledger
+func (s *SmartContract) LogJobMonitor(ctx contractapi.TransactionContextInterface, monitorResponseJSON string) error {
+	var monitor map[string]interface{}
+	if err := unmarshal(monitorResponseJSON, &monitor); err != nil {
+		return err
+	}
+
+	ts := nowRFC3339()
+	key := fmt.Sprintf("nvflare:jobmonitor:%s", ts)
+
+	if err := putJSON(ctx, key, monitor); err != nil {
+		return err
+	}
+	emit(ctx, "NVFlareJobMonitorLogged", monitor)
+	return nil
+}
+
 // LogClientShutdown(shutdownResponseJSON)
 // Logs the client graceful shutdown event to the ledger
 func (s *SmartContract) LogClientShutdown(ctx contractapi.TransactionContextInterface, shutdownResponseJSON string) error {
@@ -1335,6 +1353,96 @@ func (s *SmartContract) LogClientShutdown(ctx contractapi.TransactionContextInte
 		return err
 	}
 	emit(ctx, "NVFlareClientShutdownLogged", shutdown)
+	return nil
+}
+
+// LogSystemInfo(systemInfoJSON)
+// Logs the NVFlare system info event to the ledger
+func (s *SmartContract) LogSystemInfo(ctx contractapi.TransactionContextInterface, systemInfoJSON string) error {
+	var systemInfo map[string]interface{}
+	if err := unmarshal(systemInfoJSON, &systemInfo); err != nil {
+		return err
+	}
+
+	ts := nowRFC3339()
+	key := fmt.Sprintf("nvflare:systeminfo:%s", ts)
+
+	if err := putJSON(ctx, key, systemInfo); err != nil {
+		return err
+	}
+	emit(ctx, "NVFlareSystemInfoLogged", systemInfo)
+	return nil
+}
+
+// LogConnectedClientList(clientListJSON)
+// Logs the NVFlare connected client list event to the ledger
+func (s *SmartContract) LogConnectedClientList(ctx contractapi.TransactionContextInterface, clientListJSON string) error {
+	var clientList map[string]interface{}
+	if err := unmarshal(clientListJSON, &clientList); err != nil {
+		return err
+	}
+
+	ts := nowRFC3339()
+	key := fmt.Sprintf("nvflare:connectedclientlist:%s", ts)
+
+	if err := putJSON(ctx, key, clientList); err != nil {
+		return err
+	}
+	emit(ctx, "NVFlareConnectedClientListLogged", clientList)
+	return nil
+}
+
+// LogClientEnv(clientEnvJSON)
+// Logs the NVFlare client environment event to the ledger
+func (s *SmartContract) LogClientEnv(ctx contractapi.TransactionContextInterface, clientEnvJSON string) error {
+	var clientEnv map[string]interface{}
+	if err := unmarshal(clientEnvJSON, &clientEnv); err != nil {
+		return err
+	}
+
+	ts := nowRFC3339()
+	key := fmt.Sprintf("nvflare:clientenv:%s", ts)
+
+	if err := putJSON(ctx, key, clientEnv); err != nil {
+		return err
+	}
+	emit(ctx, "NVFlareClientEnvLogged", clientEnv)
+	return nil
+}
+
+// LogShutdownSystem(shutdownSystemJSON)
+// Logs the NVFlare system shutdown event to the ledger
+func (s *SmartContract) LogShutdownSystem(ctx contractapi.TransactionContextInterface, shutdownSystemJSON string) error {
+	var shutdownSystem map[string]interface{}
+	if err := unmarshal(shutdownSystemJSON, &shutdownSystem); err != nil {
+		return err
+	}
+
+	ts := nowRFC3339()
+	key := fmt.Sprintf("nvflare:shutdownsystem:%s", ts)
+
+	if err := putJSON(ctx, key, shutdownSystem); err != nil {
+		return err
+	}
+	emit(ctx, "NVFlareShutdownSystemLogged", shutdownSystem)
+	return nil
+}
+
+// LogStats(statsJSON)
+// Logs the NVFlare job stats event to the ledger
+func (s *SmartContract) LogStats(ctx contractapi.TransactionContextInterface, statsJSON string) error {
+	var stats map[string]interface{}
+	if err := unmarshal(statsJSON, &stats); err != nil {
+		return err
+	}
+
+	ts := nowRFC3339()
+	key := fmt.Sprintf("nvflare:stats:%s", ts)
+
+	if err := putJSON(ctx, key, stats); err != nil {
+		return err
+	}
+	emit(ctx, "NVFlareStatsLogged", stats)
 	return nil
 }
 

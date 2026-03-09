@@ -8,17 +8,17 @@ import (
 )
 
 // RegisterRoutes registers all authentication-related routes
-func RegisterRoutes(r *gin.Engine, gw *fabric.Gateway, caCfg ca.Config, cfg fabric.Config) {
+func RegisterRoutes(r *gin.Engine, gw *fabric.Gateway, caCfg ca.Config, cfg fabric.Config, basePath string) {
 	// CA Admin Handler
 	adminHandler := NewCAAdminHandler(caCfg)
-	r.POST("/api/v1/ca/enroll-admin", adminHandler.EnrollAdmin)
+	r.POST(basePath+"/ca/enroll-admin", adminHandler.EnrollAdmin)
 
 	// CA Hospital Handler
 	caHospitalHandler := NewAuthHandler(caCfg, gw, cfg)
-	r.POST("/api/v1/ca/register-enroll", caHospitalHandler.RegisterEnroll)
+	r.POST(basePath+"/ca/register-enroll", caHospitalHandler.RegisterEnroll)
 
 	// Login Handler
 	loginHandler := NewLoginHandler(gw)
-	r.POST("/api/v1/auth/login", loginHandler.Login)
-	r.POST("/api/v1/auth/verify-token", loginHandler.VerifyToken)
+	r.POST(basePath+"/auth/login", loginHandler.Login)
+	r.POST(basePath+"/auth/verify-token", loginHandler.VerifyToken)
 }

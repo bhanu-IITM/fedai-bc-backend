@@ -13,3 +13,5 @@ dist/
 # go
 /vendor/
 /chaincode/vendor/
+.env.local
+.qoder
