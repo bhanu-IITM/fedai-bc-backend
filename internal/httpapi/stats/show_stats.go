@@ -12,8 +12,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-
-
 // StatsRequest represents the request for logging job stats
 type StatsRequest struct {
 	JobID      string                 `json:"job_id" binding:"required"`
