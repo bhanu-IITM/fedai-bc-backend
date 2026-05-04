@@ -1,308 +1,11 @@
-// chaincode.go
-// Plenome / FedAI PoC Governance Chaincode (v1)
-// Implements: Site + Policy + Job + Access Grants + Round/Update/Artifacts + Queries/List APIs
-//
-// Module expectation (your go.mod):
-//   module poc-chaincode
-//   go 1.25.5
-//   require github.com/hyperledger/fabric-contract-api-go/v2 v2.2.0
-//
-// NOTE: This is a PoC-friendly implementation:
-// - Mutating “platform” ops are protected by a simple MSP allowlist (PLATFORM_ADMIN_MSP env var or default Org1MSP).
-// - Site-submitted ops (SubmitSiteUpdate) are validated against an ACTIVE grant + time window.
-
 package main
 
 import (
-	// "crypto/sha256"
-	// "encoding/hex"
-	//"crypto/rand"
-	"encoding/json"
 	"fmt"
-	"log"
-	"os"
-	"sort"
 	"strings"
-	"time"
-
-	"github.com/hyperledger/fabric-chaincode-go/v2/shim"
 
 	"github.com/hyperledger/fabric-contract-api-go/v2/contractapi"
 )
-
-/* ------------------------------- Contract ------------------------------- */
-
-type SmartContract struct {
-	contractapi.Contract
-}
-
-/* ------------------------------- Constants ------------------------------ */
-
-type SiteStatus string
-
-const (
-	SiteActive    SiteStatus = "ACTIVE"
-	SiteSuspended SiteStatus = "SUSPENDED"
-	SiteRevoked   SiteStatus = "REVOKED"
-)
-
-type PolicyStatus string
-
-const (
-	PolicyDraft      PolicyStatus = "DRAFT"
-	PolicyActive     PolicyStatus = "ACTIVE"
-	PolicyDeprecated PolicyStatus = "DEPRECATED"
-)
-
-type JobStatus string
-
-const (
-	JobCreated   JobStatus = "CREATED"
-	JobRunning   JobStatus = "RUNNING"
-	JobCompleted JobStatus = "COMPLETED"
-	JobHalted    JobStatus = "HALTED"
-)
-
-type GrantStatus string
-
-const (
-	GrantActive  GrantStatus = "ACTIVE"
-	GrantExpired GrantStatus = "EXPIRED"
-	GrantRevoked GrantStatus = "REVOKED"
-)
-
-type ArtifactType string
-
-const (
-	ArtifactINIT       ArtifactType = "INIT"
-	ArtifactCHECKPOINT ArtifactType = "CHECKPOINT"
-	ArtifactFINAL      ArtifactType = "FINAL"
-	ArtifactEVAL       ArtifactType = "EVAL"
-)
-
-/* --------------------------------- Types -------------------------------- */
-
-type Site struct {
-	SiteID                    string     `json:"site_id"`
-	OrgMSP                    string     `json:"org_msp"`
-	Jurisdiction              string     `json:"jurisdiction"`
-	CapabilitiesHash          string     `json:"capabilities_hash"`
-	EnrollmentCertFingerprint string     `json:"enrollment_cert_fingerprint,omitempty"`
-	Status                    SiteStatus `json:"status"`
-	CreatedAt                 string     `json:"created_at"`
-	UpdatedAt                 string     `json:"updated_at"`
-}
-
-type SiteAttestation struct {
-	AttestationID string `json:"attestation_id"`
-	SiteID        string `json:"site_id"`
-	EvidenceHash  string `json:"evidence_hash"` // hash of SBOM/env report/TPM quote bundle etc.
-	AttestedAt    string `json:"attested_at"`
-	AttestedByMSP string `json:"attested_by_msp"`
-}
-
-type Policy struct {
-	PolicyID      string       `json:"policy_id"`
-	Version       string       `json:"version"`
-	PolicyHash    string       `json:"policy_hash"`
-	IssuerMSP     string       `json:"issuer_msp"`
-	Status        PolicyStatus `json:"status"`
-	EffectiveFrom string       `json:"effective_from,omitempty"`
-	EffectiveTo   string       `json:"effective_to,omitempty"`
-	CreatedAt     string       `json:"created_at"`
-}
-
-type FederationJob struct {
-	JobID         string    `json:"job_id"`
-	ModelID       string    `json:"model_id"`
-	ModelInitHash string    `json:"model_init_hash"`
-	PolicyID      string    `json:"policy_id"`
-	PolicyHash    string    `json:"policy_hash"`
-	RoundsPlanned int       `json:"rounds_planned"`
-	Cadence       string    `json:"cadence"` // e.g., WEEKLY, DAILY, CRON-like, or descriptive
-	Status        JobStatus `json:"status"`
-	CreatedAt     string    `json:"created_at"`
-}
-
-type JobParticipants struct {
-	JobID         string   `json:"job_id"`
-	Participants  []string `json:"participants"` // deterministic site_id set
-	ParticipantsH string   `json:"participants_hash,omitempty"`
-	RegisteredAt  string   `json:"registered_at"`
-	RegisteredBy  string   `json:"registered_by_msp"`
-}
-
-type TrainingConstraints struct {
-	Runtime       string   `json:"runtime"` // CPU_ONLY / GPU_ENABLED / TEE_REQUIRED etc.
-	MaxRounds     int      `json:"max_rounds,omitempty"`
-	MaxEpochs     int      `json:"max_epochs,omitempty"`
-	Modalities    []string `json:"modalities,omitempty"`
-	DataScopeHash string   `json:"data_scope_hash,omitempty"`
-}
-
-type TrainingAccessGrant struct {
-	GrantID     string              `json:"grant_id"`
-	JobID       string              `json:"job_id"`
-	ModelID     string              `json:"model_id"`
-	SiteID      string              `json:"site_id"`
-	OrgMSP      string              `json:"org_msp"`
-	PolicyID    string              `json:"policy_id"`
-	PolicyHash  string              `json:"policy_hash"`
-	Purpose     string              `json:"purpose"` // TRAIN / VALIDATE
-	Constraints TrainingConstraints `json:"constraints"`
-
-	ValidFrom string      `json:"valid_from"` // RFC3339
-	ValidTo   string      `json:"valid_to"`   // RFC3339
-	Status    GrantStatus `json:"status"`
-
-	IssuedByMSP   string `json:"issued_by_msp"`
-	IssuedAt      string `json:"issued_at"`
-	RenewalHash   string `json:"renewal_hash,omitempty"`
-	RevokedReason string `json:"revoked_reason,omitempty"`
-}
-
-type EligibilityDecision struct {
-	JobID     string `json:"job_id"`
-	SiteID    string `json:"site_id"`
-	Decision  string `json:"decision"` // ALLOW / DENY
-	Reason    string `json:"reason"`
-	GrantID   string `json:"grant_id,omitempty"`
-	CheckedAt string `json:"checked_at"` // RFC3339
-}
-
-type RoundRecord struct {
-	JobID             string `json:"job_id"`
-	RoundID           int    `json:"round_id"`
-	GlobalModelHashIn string `json:"global_model_hash_in"`
-	StartedAt         string `json:"started_at"`
-	StartedByMSP      string `json:"started_by_msp"`
-}
-
-type SiteUpdate struct {
-	UpdateID       string `json:"update_id"`
-	JobID          string `json:"job_id"`
-	RoundID        int    `json:"round_id"`
-	SiteID         string `json:"site_id"`
-	UpdateHash     string `json:"update_hash"`      // hash of weights/gradients delta package
-	MetricsHash    string `json:"metrics_hash"`     // hash of metrics blob
-	DataDigestHash string `json:"data_digest_hash"` // optional: hash of dataset signature / cohort digest
-	SubmittedAt    string `json:"submitted_at"`
-	SubmittedByMSP string `json:"submitted_by_msp"`
-	GrantID        string `json:"grant_id,omitempty"`
-}
-
-type RoundCommit struct {
-	JobID                string `json:"job_id"`
-	RoundID              int    `json:"round_id"`
-	GlobalModelHashOut   string `json:"global_model_hash_out"`
-	AggregationProofHash string `json:"aggregation_proof_hash"` // hash of aggregation transcript/proof
-	CommittedAt          string `json:"committed_at"`
-	CommittedByMSP       string `json:"committed_by_msp"`
-}
-
-type ModelArtifact struct {
-	ArtifactID    string       `json:"artifact_id"`
-	JobID         string       `json:"job_id"`
-	Type          ArtifactType `json:"type"` // INIT/CHECKPOINT/FINAL/EVAL
-	Hash          string       `json:"hash"`
-	MetaHash      string       `json:"meta_hash,omitempty"` // optional: hash of JSON metadata
-	AnchoredAt    string       `json:"anchored_at"`
-	AnchoredByMSP string       `json:"anchored_by_msp"`
-}
-
-/* ------------------------------- Key Design ----------------------------- */
-
-func keySite(siteID string) string        { return "site:" + siteID }
-func keyAtt(attID string) string          { return "att:" + attID }
-func keyPolicy(policyID string) string    { return "policy:" + policyID }
-func keyJob(jobID string) string          { return "job:" + jobID }
-func keyParticipants(jobID string) string { return "participants:" + jobID }
-func keyGrant(grantID string) string      { return "grant:" + grantID }
-func keyRound(jobID string, roundID int) string {
-	return fmt.Sprintf("round:%s:%d", jobID, roundID)
-}
-func keyUpdate(updateID string) string { return "update:" + updateID }
-func keyCommit(jobID string, roundID int) string {
-	return fmt.Sprintf("commit:%s:%d", jobID, roundID)
-}
-func keyArtifact(artifactID string) string { return "artifact:" + artifactID }
-
-/* ------------------------------ Helpers --------------------------------- */
-
-func nowRFC3339() string {
-	return time.Now().UTC().Format(time.RFC3339)
-}
-
-func parseRFC3339(ts string) (time.Time, error) {
-	return time.Parse(time.RFC3339, ts)
-}
-
-func (s *SmartContract) getClientMSP(ctx contractapi.TransactionContextInterface) (string, error) {
-	return ctx.GetClientIdentity().GetMSPID()
-}
-
-// Platform admin MSP can be configured by env var at chaincode container runtime.
-// For PoC, default is Org1MSP.
-func platformAdminMSP() string {
-	if v := strings.TrimSpace(os.Getenv("PLATFORM_ADMIN_MSP")); v != "" {
-		return v
-	}
-	return "Org1MSP"
-}
-
-func requirePlatform(ctx contractapi.TransactionContextInterface) error {
-	msp, err := ctx.GetClientIdentity().GetMSPID()
-	if err != nil {
-		return err
-	}
-	if msp != platformAdminMSP() {
-		return fmt.Errorf("access denied: requires platform admin MSP (%s)", platformAdminMSP())
-	}
-	return nil
-}
-
-func putJSON(ctx contractapi.TransactionContextInterface, k string, v any) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	return ctx.GetStub().PutState(k, b)
-}
-
-func getJSON[T any](ctx contractapi.TransactionContextInterface, k string, out *T) (bool, error) {
-	b, err := ctx.GetStub().GetState(k)
-	if err != nil {
-		return false, err
-	}
-	if b == nil {
-		return false, nil
-	}
-	return true, json.Unmarshal(b, out)
-}
-
-func mustNonEmpty(field, name string) error {
-	if strings.TrimSpace(field) == "" {
-		return fmt.Errorf("%s is required", name)
-	}
-	return nil
-}
-
-func emit(ctx contractapi.TransactionContextInterface, name string, payload any) {
-	b, _ := json.Marshal(payload)
-	_ = ctx.GetStub().SetEvent(name, b)
-}
-
-func marshal(v any) (string, error) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-func unmarshal(in string, out any) error {
-	return json.Unmarshal([]byte(in), out)
-}
 
 /* ============================== A) Site Lifecycle ============================== */
 
@@ -455,8 +158,6 @@ func (s *SmartContract) RevokeSite(ctx contractapi.TransactionContextInterface, 
 // 	return marshal(binding)
 // }
 
-
-
 // ListIdentitiesForMSP(msp_id) - List all identities for an organization: Administrative Query (e.g., for governance dashboard)
 // func (s *SmartContract) ListIdentitiesForMSP(ctx contractapi.TransactionContextInterface, mspID string) (string, error) {
 // 	iter, err := ctx.GetStub().GetStateByPartialCompositeKey("identity~msp", []string{mspID})
@@ -473,7 +174,7 @@ func (s *SmartContract) RevokeSite(ctx contractapi.TransactionContextInterface, 
 // 			continue
 // 		}
 // 		clientID := parts[1]
-		
+
 // 		var binding IdentityBinding
 // 		ok, err := getJSON(ctx, fmt.Sprintf("identity:binding:%s", clientID), &binding)
 // 		if err != nil || !ok {
@@ -560,119 +261,6 @@ func (s *SmartContract) DeprecatePolicy(ctx contractapi.TransactionContextInterf
 }
 
 /* ============================== C) Federation Job Lifecycle ============================== */
-
-// CreateFederationJob(jobJSON)
-func (s *SmartContract) CreateFederationJob(ctx contractapi.TransactionContextInterface, jobJSON string) error {
-	if err := requirePlatform(ctx); err != nil {
-		return err
-	}
-	var j FederationJob
-	if err := unmarshal(jobJSON, &j); err != nil {
-		return err
-	}
-	if err := mustNonEmpty(j.JobID, "job_id"); err != nil {
-		return err
-	}
-	if err := mustNonEmpty(j.ModelID, "model_id"); err != nil {
-		return err
-	}
-	if err := mustNonEmpty(j.PolicyID, "policy_id"); err != nil {
-		return err
-	}
-	if err := mustNonEmpty(j.PolicyHash, "policy_hash"); err != nil {
-		return err
-	}
-	if j.RoundsPlanned <= 0 {
-		return fmt.Errorf("rounds_planned must be > 0")
-	}
-
-	// Ensure policy exists (and hash matches)
-	var p Policy
-	ok, err := getJSON(ctx, keyPolicy(j.PolicyID), &p)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("policy not found: %s", j.PolicyID)
-	}
-	if p.PolicyHash != j.PolicyHash {
-		return fmt.Errorf("policy hash mismatch (policy record vs job)")
-	}
-
-	if j.Status == "" {
-		j.Status = JobCreated
-	}
-	if strings.TrimSpace(j.CreatedAt) == "" {
-		j.CreatedAt = nowRFC3339()
-	}
-
-	if err := putJSON(ctx, keyJob(j.JobID), j); err != nil {
-		return err
-	}
-	emit(ctx, "JobCreated", j)
-	return nil
-}
-
-// RegisterJobParticipants(job_id, participantsJSON)
-func (s *SmartContract) RegisterJobParticipants(ctx contractapi.TransactionContextInterface, jobID, participantsJSON string) error {
-	if err := requirePlatform(ctx); err != nil {
-		return err
-	}
-	// Ensure job exists
-	var j FederationJob
-	ok, err := getJSON(ctx, keyJob(jobID), &j)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("job not found: %s", jobID)
-	}
-
-	var payload struct {
-		Participants []string `json:"participants"`
-		Hash         string   `json:"participants_hash,omitempty"`
-	}
-	if err := unmarshal(participantsJSON, &payload); err != nil {
-		return err
-	}
-	if len(payload.Participants) == 0 {
-		return fmt.Errorf("participants must be non-empty")
-	}
-	// Normalize + sort for determinism
-	uniq := make(map[string]struct{})
-	var parts []string
-	for _, sID := range payload.Participants {
-		sID = strings.TrimSpace(sID)
-		if sID == "" {
-			continue
-		}
-		if _, ok := uniq[sID]; ok {
-			continue
-		}
-		uniq[sID] = struct{}{}
-		parts = append(parts, sID)
-	}
-	sort.Strings(parts)
-	if len(parts) == 0 {
-		return fmt.Errorf("participants must be non-empty after normalization")
-	}
-
-	msp, _ := s.getClientMSP(ctx)
-	rec := JobParticipants{
-		JobID:         jobID,
-		Participants:  parts,
-		ParticipantsH: payload.Hash,
-		RegisteredAt:  nowRFC3339(),
-		RegisteredBy:  msp,
-	}
-
-	if err := putJSON(ctx, keyParticipants(jobID), rec); err != nil {
-		return err
-	}
-	emit(ctx, "JobParticipantsRegistered", map[string]any{"job_id": jobID, "count": len(parts)})
-	_ = j // referenced above (keeps compilation clean if you expand logic later)
-	return nil
-}
 
 /* ==================== D) Training Authorization (Access-Grant APIs) ==================== */
 
@@ -951,207 +539,6 @@ func (s *SmartContract) RevokeTrainingAccess(ctx contractapi.TransactionContextI
 
 /* ========================== E) Round + Provenance (Audit Spine) ========================== */
 
-// StartRound(job_id, round_id, global_model_hash_in)
-func (s *SmartContract) StartRound(ctx contractapi.TransactionContextInterface, jobID string, roundID int, globalModelHashIn string) error {
-	if err := requirePlatform(ctx); err != nil {
-		return err
-	}
-	if err := mustNonEmpty(jobID, "job_id"); err != nil {
-		return err
-	}
-	if roundID < 0 {
-		return fmt.Errorf("round_id must be >= 0")
-	}
-	if err := mustNonEmpty(globalModelHashIn, "global_model_hash_in"); err != nil {
-		return err
-	}
-
-	// Ensure job exists
-	var job FederationJob
-	ok, err := getJSON(ctx, keyJob(jobID), &job)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("job not found: %s", jobID)
-	}
-	_ = job
-
-	msp, _ := s.getClientMSP(ctx)
-	r := RoundRecord{
-		JobID:             jobID,
-		RoundID:           roundID,
-		GlobalModelHashIn: globalModelHashIn,
-		StartedAt:         nowRFC3339(),
-		StartedByMSP:      msp,
-	}
-	if err := putJSON(ctx, keyRound(jobID, roundID), r); err != nil {
-		return err
-	}
-
-	// Index: round~job(jobID, roundID)
-	idx, _ := ctx.GetStub().CreateCompositeKey("round~job", []string{jobID, fmt.Sprintf("%d", roundID)})
-	_ = ctx.GetStub().PutState(idx, []byte{0x00})
-
-	emit(ctx, "RoundStarted", r)
-	return nil
-}
-
-// SubmitSiteUpdate(updateJSON)
-func (s *SmartContract) SubmitSiteUpdate(ctx contractapi.TransactionContextInterface, updateJSON string) error {
-	// Site action: validate against eligibility at current time (or submitted_at)
-	var u SiteUpdate
-	if err := unmarshal(updateJSON, &u); err != nil {
-		return err
-	}
-	if err := mustNonEmpty(u.UpdateID, "update_id"); err != nil {
-		return err
-	}
-	if err := mustNonEmpty(u.JobID, "job_id"); err != nil {
-		return err
-	}
-	if u.RoundID < 0 {
-		return fmt.Errorf("round_id must be >= 0")
-	}
-	if err := mustNonEmpty(u.SiteID, "site_id"); err != nil {
-		return err
-	}
-	if err := mustNonEmpty(u.UpdateHash, "update_hash"); err != nil {
-		return err
-	}
-	if strings.TrimSpace(u.SubmittedAt) == "" {
-		u.SubmittedAt = nowRFC3339()
-	}
-
-	// Caller MSP
-	msp, err := s.getClientMSP(ctx)
-	if err != nil {
-		return err
-	}
-	u.SubmittedByMSP = msp
-
-	// Eligibility check at submitted_at time
-	decJSON, err := s.VerifyTrainingEligibility(ctx, u.JobID, u.SiteID, u.SubmittedAt)
-	if err != nil {
-		return err
-	}
-	var dec EligibilityDecision
-	if err := unmarshal(decJSON, &dec); err != nil {
-		return err
-	}
-	if dec.Decision != "ALLOW" {
-		return fmt.Errorf("update rejected: eligibility DENY (%s)", dec.Reason)
-	}
-	u.GrantID = dec.GrantID
-
-	// Persist update
-	if err := putJSON(ctx, keyUpdate(u.UpdateID), u); err != nil {
-		return err
-	}
-
-	// Index: update~job~round(jobID, roundID, updateID)
-	idx, _ := ctx.GetStub().CreateCompositeKey("update~job~round", []string{u.JobID, fmt.Sprintf("%d", u.RoundID), u.UpdateID})
-	_ = ctx.GetStub().PutState(idx, []byte{0x00})
-
-	emit(ctx, "SiteUpdateSubmitted", map[string]any{"job_id": u.JobID, "round_id": u.RoundID, "site_id": u.SiteID, "update_id": u.UpdateID})
-	return nil
-}
-
-// CommitRound(commitJSON)
-func (s *SmartContract) CommitRound(ctx contractapi.TransactionContextInterface, commitJSON string) error {
-	if err := requirePlatform(ctx); err != nil {
-		return err
-	}
-	var c RoundCommit
-	if err := unmarshal(commitJSON, &c); err != nil {
-		return err
-	}
-	if err := mustNonEmpty(c.JobID, "job_id"); err != nil {
-		return err
-	}
-	if c.RoundID < 0 {
-		return fmt.Errorf("round_id must be >= 0")
-	}
-	if err := mustNonEmpty(c.GlobalModelHashOut, "global_model_hash_out"); err != nil {
-		return err
-	}
-	if err := mustNonEmpty(c.AggregationProofHash, "aggregation_proof_hash"); err != nil {
-		return err
-	}
-	if strings.TrimSpace(c.CommittedAt) == "" {
-		c.CommittedAt = nowRFC3339()
-	}
-	msp, _ := s.getClientMSP(ctx)
-	c.CommittedByMSP = msp
-
-	// Ensure round exists (optional but good)
-	var r RoundRecord
-	ok, err := getJSON(ctx, keyRound(c.JobID, c.RoundID), &r)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("round not found: job=%s round=%d", c.JobID, c.RoundID)
-	}
-	_ = r
-
-	if err := putJSON(ctx, keyCommit(c.JobID, c.RoundID), c); err != nil {
-		return err
-	}
-	emit(ctx, "RoundCommitted", c)
-	return nil
-}
-
-// AnchorModelArtifact(artifactJSON)
-func (s *SmartContract) AnchorModelArtifact(ctx contractapi.TransactionContextInterface, artifactJSON string) error {
-	if err := requirePlatform(ctx); err != nil {
-		return err
-	}
-	var a ModelArtifact
-	if err := unmarshal(artifactJSON, &a); err != nil {
-		return err
-	}
-	if err := mustNonEmpty(a.ArtifactID, "artifact_id"); err != nil {
-		return err
-	}
-	if err := mustNonEmpty(a.JobID, "job_id"); err != nil {
-		return err
-	}
-	if err := mustNonEmpty(string(a.Type), "type"); err != nil {
-		return err
-	}
-	if err := mustNonEmpty(a.Hash, "hash"); err != nil {
-		return err
-	}
-	if strings.TrimSpace(a.AnchoredAt) == "" {
-		a.AnchoredAt = nowRFC3339()
-	}
-	msp, _ := s.getClientMSP(ctx)
-	a.AnchoredByMSP = msp
-
-	// Ensure job exists
-	var job FederationJob
-	ok, err := getJSON(ctx, keyJob(a.JobID), &job)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("job not found: %s", a.JobID)
-	}
-	_ = job
-
-	if err := putJSON(ctx, keyArtifact(a.ArtifactID), a); err != nil {
-		return err
-	}
-
-	// Index: artifact~job(jobID, artifactID)
-	idx, _ := ctx.GetStub().CreateCompositeKey("artifact~job", []string{a.JobID, a.ArtifactID})
-	_ = ctx.GetStub().PutState(idx, []byte{0x00})
-
-	emit(ctx, "ArtifactAnchored", map[string]any{"job_id": a.JobID, "artifact_id": a.ArtifactID, "type": a.Type})
-	return nil
-}
-
 /* ============================== F) Queries (minimum set) ============================== */
 
 // GetSite(site_id)
@@ -1206,19 +593,6 @@ func (s *SmartContract) GetGrant(ctx contractapi.TransactionContextInterface, gr
 	return marshal(g)
 }
 
-// GetRound(job_id, round_id)
-func (s *SmartContract) GetRound(ctx contractapi.TransactionContextInterface, jobID string, roundID int) (string, error) {
-	var r RoundRecord
-	ok, err := getJSON(ctx, keyRound(jobID, roundID), &r)
-	if err != nil {
-		return "", err
-	}
-	if !ok {
-		return "", fmt.Errorf("round not found: job=%s round=%d", jobID, roundID)
-	}
-	return marshal(r)
-}
-
 // ListGrantsForJob(job_id)
 func (s *SmartContract) ListGrantsForJob(ctx contractapi.TransactionContextInterface, jobID string) (string, error) {
 	iter, err := ctx.GetStub().GetStateByPartialCompositeKey("grant~job", []string{jobID})
@@ -1243,58 +617,6 @@ func (s *SmartContract) ListGrantsForJob(ctx contractapi.TransactionContextInter
 		grants = append(grants, g)
 	}
 	return marshal(grants)
-}
-
-// ListUpdatesForRound(job_id, round_id)
-func (s *SmartContract) ListUpdatesForRound(ctx contractapi.TransactionContextInterface, jobID string, roundID int) (string, error) {
-	iter, err := ctx.GetStub().GetStateByPartialCompositeKey("update~job~round", []string{jobID, fmt.Sprintf("%d", roundID)})
-	if err != nil {
-		return "", err
-	}
-	defer iter.Close()
-
-	var updates []SiteUpdate
-	for iter.HasNext() {
-		kv, _ := iter.Next()
-		_, parts, _ := ctx.GetStub().SplitCompositeKey(kv.Key)
-		if len(parts) != 3 {
-			continue
-		}
-		updateID := parts[2]
-		var u SiteUpdate
-		ok, err := getJSON(ctx, keyUpdate(updateID), &u)
-		if err != nil || !ok {
-			continue
-		}
-		updates = append(updates, u)
-	}
-	return marshal(updates)
-}
-
-// ListArtifactsForJob(job_id)
-func (s *SmartContract) ListArtifactsForJob(ctx contractapi.TransactionContextInterface, jobID string) (string, error) {
-	iter, err := ctx.GetStub().GetStateByPartialCompositeKey("artifact~job", []string{jobID})
-	if err != nil {
-		return "", err
-	}
-	defer iter.Close()
-
-	var artifacts []ModelArtifact
-	for iter.HasNext() {
-		kv, _ := iter.Next()
-		_, parts, _ := ctx.GetStub().SplitCompositeKey(kv.Key)
-		if len(parts) != 2 {
-			continue
-		}
-		artifactID := parts[1]
-		var a ModelArtifact
-		ok, err := getJSON(ctx, keyArtifact(artifactID), &a)
-		if err != nil || !ok {
-			continue
-		}
-		artifacts = append(artifacts, a)
-	}
-	return marshal(artifacts)
 }
 
 /* ============================== G) Logging/Audit Functions (NVFlare Integration) ============================== */
@@ -1573,7 +895,7 @@ func (s *SmartContract) StoreLoginCredentials(ctx contractapi.TransactionContext
 // 		}
 // 		// Verify MSP matches site's MSP
 // 		if site.OrgMSP != binding.MSPID {
-// 			return fmt.Errorf("MSP mismatch: site %s has MSP %s, binding has %s", 
+// 			return fmt.Errorf("MSP mismatch: site %s has MSP %s, binding has %s",
 // 				binding.SiteID, site.OrgMSP, binding.MSPID)
 // 		}
 // 	}
@@ -1617,7 +939,6 @@ func (s *SmartContract) StoreLoginCredentials(ctx contractapi.TransactionContext
 // 	})
 // 	return nil
 // }
-
 
 // ValidateLogin(loginJSON)
 // Validates client credentials against stored credentials
@@ -1709,7 +1030,7 @@ func (s *SmartContract) ValidateLogin(ctx contractapi.TransactionContextInterfac
 // 	if err == nil {
 // 		fp := sha256.Sum256(cert.Raw)
 // 		callerFP := hex.EncodeToString(fp[:])
-		
+
 // 		if binding.CertFingerprint != "" && binding.CertFingerprint != callerFP {
 // 			return marshal(map[string]any{
 // 				"valid": false,
@@ -1854,7 +1175,7 @@ func (s *SmartContract) StoreLoginToken(ctx contractapi.TransactionContextInterf
 // 	if err == nil {
 // 		fp := sha256.Sum256(cert.Raw)
 // 		callerFP := hex.EncodeToString(fp[:])
-		
+
 // 		if binding.CertFingerprint != "" && binding.CertFingerprint != callerFP {
 // 			return marshal(map[string]any{
 // 				"valid": false,
@@ -1897,8 +1218,6 @@ func (s *SmartContract) VerifyLoginToken(ctx contractapi.TransactionContextInter
 	return marshal(map[string]any{"valid": true, "data": tokenData})
 }
 
-
-
 // RevokeIdentityBinding(client_id, reason) - Disable an identity
 // func (s *SmartContract) RevokeIdentityBinding(ctx contractapi.TransactionContextInterface, clientID, reason string) error {
 // 	if err := requirePlatform(ctx); err != nil {
@@ -1930,41 +1249,3 @@ func (s *SmartContract) VerifyLoginToken(ctx contractapi.TransactionContextInter
 // 	})
 // 	return nil
 // }
-
-/* ------------------------------ Main ------------------------------ */
-
-func main() {
-	// Build contract chaincode (same as before)
-	cc, err := contractapi.NewChaincode(&SmartContract{})
-	if err != nil {
-		log.Panicf("error creating chaincode: %v", err)
-	}
-
-	// CCaaS env vars (set by your docker run)
-	ccid := os.Getenv("CHAINCODE_ID")             // usually PACKAGE_ID
-	addr := os.Getenv("CHAINCODE_SERVER_ADDRESS") // e.g. 0.0.0.0:9999
-
-	if ccid == "" {
-		log.Panic("missing env CHAINCODE_ID")
-	}
-	if addr == "" {
-		log.Panic("missing env CHAINCODE_SERVER_ADDRESS")
-	}
-
-	server := &shim.ChaincodeServer{
-		CCID:    ccid,
-		Address: addr,
-		CC:      cc,
-		TLSProps: shim.TLSProperties{
-			Disabled: true, // keep false TLS for now (matches connection.json tls_required=false)
-			// If later you enable TLS, you’ll set:
-			// Disabled: false,
-			// Key:  ..., Cert: ..., ClientCACerts: ...
-		},
-	}
-
-	log.Printf("Starting CCaaS chaincode server: CCID=%s addr=%s", ccid, addr)
-	if err := server.Start(); err != nil {
-		log.Panicf("chaincode server failed to start: %v", err)
-	}
-}
